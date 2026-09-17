@@ -10,10 +10,14 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       return;
     }
 
+    const version = buffer.readInt16BE(6);
     const correlationId = buffer.readInt32BE(8);
-    const response = Buffer.alloc(8);
+    const errorCode = version >= 0 && version <= 4 ? 0 : 35;
+
+    const response = Buffer.alloc(10);
     response.writeUInt32BE(0, 0);
     response.writeInt32BE(correlationId, 4);
+    response.writeInt16BE(errorCode, 8);
 
     connection.end(response);
   });
