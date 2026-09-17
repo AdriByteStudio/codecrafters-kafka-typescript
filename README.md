@@ -1,0 +1,34 @@
+[![progress-banner](https://backend.codecrafters.io/progress/kafka/bae4c215-97cc-4e22-93ef-80ecf859639b)](https://app.codecrafters.io/users/AdriByteStudio?r=2qF)
+
+This is a starting point for TypeScript solutions to the
+["Build Your Own Kafka" Challenge](https://codecrafters.io/challenges/kafka).
+
+In this challenge, you'll build a toy Kafka clone that's capable of accepting
+and responding to ApiVersions & Fetch API requests. You'll also learn about
+encoding and decoding messages using the Kafka wire protocol. You'll also learn
+about handling the network protocol, event loops, TCP sockets and more.
+
+**Note**: If you're viewing this repo on GitHub, head over to
+[codecrafters.io](https://codecrafters.io) to try the challenge.
+
+# Passing the first stage
+
+The entry point for your Kafka implementation is in `app/main.ts`. Study and
+uncomment the relevant code, and then run the command below to execute the tests
+on our servers:
+
+```sh
+codecrafters submit
+```
+
+That's all!
+
+# Stage 2 & beyond
+
+Note: This section is for stages 2 and beyond.
+
+1. Ensure you have `bun (1.3)` installed locally
+1. Run `./your_program.sh` to run your Kafka broker, which is implemented in
+   `app/main.ts`.
+1. Run `codecrafters submit` to submit your solution to CodeCrafters. Test
+   output will be streamed to your terminal.
