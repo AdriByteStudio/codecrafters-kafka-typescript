@@ -112,9 +112,18 @@ function readMetadataLog(): Map<string, TopicMetadata> {
     const recordsCount = log.readInt32BE(offset + 61);
     let recordOffset = offset + 65;
 
+    if (batchLength <= 0 || batchEnd > log.length || recordsCount < 0) {
+      break;
+    }
+
     for (let recordIndex = 0; recordIndex < recordsCount && recordOffset < batchEnd; recordIndex += 1) {
       const [recordLength, recordStart] = readVarint(log, recordOffset);
       const recordEnd = recordStart + recordLength;
+
+      if (recordLength <= 0 || recordEnd > batchEnd || recordEnd <= recordOffset) {
+        break;
+      }
+
       let currentOffset = recordStart + 1;
       [, currentOffset] = readVarint(log, currentOffset);
       [, currentOffset] = readVarint(log, currentOffset);
@@ -125,25 +134,29 @@ function readMetadataLog(): Map<string, TopicMetadata> {
       const value = log.subarray(recordValueOffset, recordValueOffset + valueLength);
       recordOffset = recordEnd;
 
-      if (value.length < 3) {
-        continue;
-      }
+      try {
+        if (value.length < 3) {
+          continue;
+        }
 
-      let valueOffset = 0;
-      [, valueOffset] = readUnsignedVarint(value, valueOffset);
-      const [apiKey, apiKeyOffset] = readUnsignedVarint(value, valueOffset);
-      const [, messageOffset] = readUnsignedVarint(value, apiKeyOffset);
-      if (apiKey === 2) {
-        const record = readTopicRecord(value, messageOffset);
-        topics.set(record.name, {
-          topicId: record.topicId,
-          partitions: partitionsByTopic.get(record.topicId.toString("hex")) ?? [],
-        });
-      } else if (apiKey === 3) {
-        const partition = readPartitionRecord(value, messageOffset);
-        const topicPartitions = partitionsByTopic.get(partition.topicId.toString("hex")) ?? [];
-        topicPartitions.push(partition);
-        partitionsByTopic.set(partition.topicId.toString("hex"), topicPartitions);
+        let valueOffset = 0;
+        [, valueOffset] = readUnsignedVarint(value, valueOffset);
+        const [apiKey, apiKeyOffset] = readUnsignedVarint(value, valueOffset);
+        const [, messageOffset] = readUnsignedVarint(value, apiKeyOffset);
+        if (apiKey === 2) {
+          const record = readTopicRecord(value, messageOffset);
+          topics.set(record.name, {
+            topicId: record.topicId,
+            partitions: partitionsByTopic.get(record.topicId.toString("hex")) ?? [],
+          });
+        } else if (apiKey === 3) {
+          const partition = readPartitionRecord(value, messageOffset);
+          const topicPartitions = partitionsByTopic.get(partition.topicId.toString("hex")) ?? [];
+          topicPartitions.push(partition);
+          partitionsByTopic.set(partition.topicId.toString("hex"), topicPartitions);
+        }
+      } catch {
+        continue;
       }
     }
 
