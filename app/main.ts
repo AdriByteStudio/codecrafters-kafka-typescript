@@ -64,8 +64,17 @@ function readCompactIntArray(buffer: Buffer, offset: number): [number[], number]
 
 function readTopicRecord(value: Buffer, messageOffset: number): { name: string; topicId: Buffer } {
   let offset = messageOffset;
-  const nameLength = value.readUInt16BE(offset);
-  offset += 2;
+  let nameLength: number;
+
+  if (value[offset] === 0) {
+    nameLength = value.readUInt16BE(offset);
+    offset += 2;
+  } else {
+    const [encodedLength, nameOffset] = readUnsignedVarint(value, offset);
+    nameLength = encodedLength - 1;
+    offset = nameOffset;
+  }
+
   const name = value.subarray(offset, offset + nameLength).toString();
   offset += nameLength;
 
