@@ -46,20 +46,23 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         continue;
       }
 
-      const apiKeyEntry = Buffer.alloc(7);
-      apiKeyEntry.writeInt16BE(18, 0);
-      apiKeyEntry.writeInt16BE(0, 2);
-      apiKeyEntry.writeInt16BE(4, 4);
+      const apiKeys = Buffer.alloc(14);
+      apiKeys.writeInt16BE(18, 0);
+      apiKeys.writeInt16BE(0, 2);
+      apiKeys.writeInt16BE(4, 4);
+      apiKeys.writeInt16BE(75, 7);
+      apiKeys.writeInt16BE(0, 9);
+      apiKeys.writeInt16BE(0, 11);
 
-      const body = Buffer.alloc(2 + 1 + apiKeyEntry.length + 4 + 1);
+      const body = Buffer.alloc(2 + 1 + apiKeys.length + 4 + 1);
       let offset = 0;
 
       body.writeInt16BE(0, offset);
       offset += 2;
-      body[offset] = 2;
+      body[offset] = 3;
       offset += 1;
-      apiKeyEntry.copy(body, offset);
-      offset += apiKeyEntry.length;
+      apiKeys.copy(body, offset);
+      offset += apiKeys.length;
       body.writeInt32BE(0, offset);
       offset += 4;
       body[offset] = 0;
