@@ -1,4 +1,161 @@
 import net from "net";
+import { readFileSync } from "fs";
+
+type PartitionMetadata = {
+  partitionId: number;
+  topicId: Buffer;
+  leaderId: number;
+  leaderEpoch: number;
+  replicas: number[];
+  isr: number[];
+};
+
+type TopicMetadata = {
+  topicId: Buffer;
+  partitions: PartitionMetadata[];
+};
+
+const metadataLogPath = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log";
+
+function readVarint(buffer: Buffer, offset: number): [number, number] {
+  let value = 0;
+  let shift = 0;
+
+  while (offset < buffer.length) {
+    const byte = buffer[offset++];
+    value |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      return [(value >>> 1) ^ -(value & 1), offset];
+    }
+    shift += 7;
+  }
+
+  throw new Error("truncated varint");
+}
+
+function readUnsignedVarint(buffer: Buffer, offset: number): [number, number] {
+  let value = 0;
+  let shift = 0;
+
+  while (offset < buffer.length) {
+    const byte = buffer[offset++];
+    value |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      return [value, offset];
+    }
+    shift += 7;
+  }
+
+  throw new Error("truncated unsigned varint");
+}
+
+function readCompactIntArray(buffer: Buffer, offset: number): [number[], number] {
+  const [encodedLength, nextOffset] = readUnsignedVarint(buffer, offset);
+  const values: number[] = [];
+  let currentOffset = nextOffset;
+
+  for (let index = 0; index < encodedLength - 1; index += 1) {
+    values.push(buffer.readInt32BE(currentOffset));
+    currentOffset += 4;
+  }
+
+  return [values, currentOffset];
+}
+
+function readTopicRecord(value: Buffer, messageOffset: number): { name: string; topicId: Buffer } {
+  let offset = messageOffset;
+  const [encodedLength, nameOffset] = readUnsignedVarint(value, offset);
+  const nameLength = encodedLength - 1;
+  offset = nameOffset;
+  const name = value.subarray(offset, offset + nameLength).toString();
+  offset += nameLength;
+
+  return { name, topicId: Buffer.from(value.subarray(offset, offset + 16)) };
+}
+
+function readPartitionRecord(value: Buffer, messageOffset: number): PartitionMetadata {
+  let offset = messageOffset;
+  const partitionId = value.readInt32BE(offset);
+  offset += 4;
+  const topicId = Buffer.from(value.subarray(offset, offset + 16));
+  offset += 16;
+
+  const [replicas, replicasOffset] = readCompactIntArray(value, offset);
+  const [isr, isrOffset] = readCompactIntArray(value, replicasOffset);
+  const [, removingReplicasOffset] = readCompactIntArray(value, isrOffset);
+  const [, addingReplicasOffset] = readCompactIntArray(value, removingReplicasOffset);
+  offset = addingReplicasOffset;
+
+  const leaderId = value.readInt32BE(offset);
+  offset += 4;
+  const leaderEpochOffset = offset + 1;
+  const leaderEpoch = value.readInt32BE(leaderEpochOffset);
+
+  return { partitionId, topicId, leaderId, leaderEpoch, replicas, isr };
+}
+
+function readMetadataLog(topicName: string): TopicMetadata | undefined {
+  let log: Buffer;
+
+  try {
+    log = readFileSync(metadataLogPath);
+  } catch {
+    return undefined;
+  }
+
+  let offset = 0;
+  let topic: TopicMetadata | undefined;
+  const partitions: PartitionMetadata[] = [];
+
+  while (offset + 61 <= log.length) {
+    const batchLength = log.readInt32BE(offset + 8);
+    const batchEnd = offset + 12 + batchLength;
+    const recordsCount = log.readInt32BE(offset + 57);
+    let recordOffset = offset + 61;
+
+    for (let recordIndex = 0; recordIndex < recordsCount && recordOffset < batchEnd; recordIndex += 1) {
+      const [recordLength, recordStart] = readVarint(log, recordOffset);
+      const recordEnd = recordStart + recordLength;
+      let currentOffset = recordStart + 1;
+      [, currentOffset] = readVarint(log, currentOffset);
+      [, currentOffset] = readVarint(log, currentOffset);
+
+      const [keyLength, keyOffset] = readVarint(log, currentOffset);
+      const key = log.subarray(keyOffset, keyOffset + keyLength);
+      currentOffset = keyOffset + keyLength;
+      const [valueLength, recordValueOffset] = readVarint(log, currentOffset);
+      const value = log.subarray(recordValueOffset, recordValueOffset + valueLength);
+      recordOffset = recordEnd;
+
+      if (value.length < 3) {
+        continue;
+      }
+
+      let valueOffset = 0;
+      [, valueOffset] = readUnsignedVarint(value, valueOffset);
+      const [apiKey, apiKeyOffset] = readUnsignedVarint(value, valueOffset);
+      const [, messageOffset] = readUnsignedVarint(value, apiKeyOffset);
+      if (apiKey === 2) {
+        const record = readTopicRecord(value, messageOffset);
+        if (record.name === topicName) {
+          topic = { topicId: record.topicId, partitions: [] };
+        }
+      } else if (apiKey === 3 && topic) {
+        const partition = readPartitionRecord(value, messageOffset);
+        if (topic.topicId.equals(partition.topicId)) {
+          partitions.push(partition);
+        }
+      }
+    }
+
+    if (topic) {
+      topic.partitions = partitions;
+    }
+    offset = batchEnd;
+  }
+
+  return topic;
+}
 
 const server: net.Server = net.createServer((connection: net.Socket) => {
   let buffer = Buffer.alloc(0);
@@ -63,34 +220,53 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const topicNameLength = request[topicsOffset + 1] - 1;
         const topicName = request.subarray(topicsOffset + 2, topicsOffset + 2 + topicNameLength);
 
-        const topic = Buffer.alloc(2 + 1 + topicName.length + 16 + 1 + 1 + 4 + 1);
-        let topicOffset = 0;
-        topic.writeInt16BE(3, topicOffset);
-        topicOffset += 2;
-        topic[topicOffset] = topicName.length + 1;
-        topicOffset += 1;
-        topicName.copy(topic, topicOffset);
-        topicOffset += topicName.length;
-        topicOffset += 16;
-        topic[topicOffset] = 0;
-        topicOffset += 1;
-        topic[topicOffset] = 1;
-        topicOffset += 1;
-        topic.writeInt32BE(0, topicOffset);
-        topicOffset += 4;
-        topic[topicOffset] = 0;
+        const metadata = readMetadataLog(topicName.toString());
+        const partitions = metadata?.partitions ?? [];
+        const partitionResponses = partitions.map((partition) => {
+          const response = Buffer.alloc(
+            2 + 4 + 4 + 4 + 1 + partition.replicas.length * 4 + 1 + partition.isr.length * 4 + 1 + 1 + 1 + 1,
+          );
+          let offset = 0;
+          response.writeInt16BE(0, offset);
+          offset += 2;
+          response.writeInt32BE(partition.partitionId, offset);
+          offset += 4;
+          response.writeInt32BE(partition.leaderId, offset);
+          offset += 4;
+          response.writeInt32BE(partition.leaderEpoch, offset);
+          offset += 4;
+          response[offset++] = partition.replicas.length + 1;
+          for (const replica of partition.replicas) {
+            response.writeInt32BE(replica, offset);
+            offset += 4;
+          }
+          response[offset++] = partition.isr.length + 1;
+          for (const replica of partition.isr) {
+            response.writeInt32BE(replica, offset);
+            offset += 4;
+          }
+          response[offset++] = 1;
+          response[offset++] = 1;
+          response[offset++] = 1;
+          response[offset] = 0;
+          return response;
+        });
 
-        const body = Buffer.alloc(4 + 1 + topic.length + 1 + 1);
-        let bodyOffset = 0;
-        body.writeInt32BE(0, bodyOffset);
-        bodyOffset += 4;
-        body[bodyOffset] = 2;
-        bodyOffset += 1;
-        topic.copy(body, bodyOffset);
-        bodyOffset += topic.length;
-        body[bodyOffset] = 0xff;
-        bodyOffset += 1;
-        body[bodyOffset] = 0;
+        const topicResponse = Buffer.concat([
+          Buffer.from([metadata ? 0 : 0, metadata ? 0 : 3]),
+          Buffer.from([topicName.length + 1]),
+          topicName,
+          metadata?.topicId ?? Buffer.alloc(16),
+          Buffer.from([0, partitions.length + 1]),
+          ...partitionResponses,
+          Buffer.from([0, 0, 0, 0, 0]),
+        ]);
+
+        const body = Buffer.concat([
+          Buffer.from([0, 0, 0, 0, 2]),
+          topicResponse,
+          Buffer.from([0xff, 0]),
+        ]);
 
         const response = Buffer.alloc(4 + 4 + 1 + body.length);
         response.writeUInt32BE(4 + 1 + body.length, 0);
