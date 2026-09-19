@@ -106,11 +106,11 @@ function readMetadataLog(): Map<string, TopicMetadata> {
   let offset = 0;
   const partitionsByTopic = new Map<string, PartitionMetadata[]>();
 
-  while (offset + 61 <= log.length) {
+  while (offset + 65 <= log.length) {
     const batchLength = log.readInt32BE(offset + 8);
     const batchEnd = offset + 12 + batchLength;
-    const recordsCount = log.readInt32BE(offset + 57);
-    let recordOffset = offset + 61;
+    const recordsCount = log.readInt32BE(offset + 61);
+    let recordOffset = offset + 65;
 
     for (let recordIndex = 0; recordIndex < recordsCount && recordOffset < batchEnd; recordIndex += 1) {
       const [recordLength, recordStart] = readVarint(log, recordOffset);
