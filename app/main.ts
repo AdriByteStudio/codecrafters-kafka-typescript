@@ -64,9 +64,17 @@ function readCompactIntArray(buffer: Buffer, offset: number): [number[], number]
 
 function readTopicRecord(value: Buffer, messageOffset: number): { name: string; topicId: Buffer } {
   let offset = messageOffset;
-  const [encodedLength, nameOffset] = readUnsignedVarint(value, offset);
-  const nameLength = encodedLength - 1;
-  offset = nameOffset;
+  let nameLength: number;
+
+  if (value[offset] === 0) {
+    nameLength = value.readUInt16BE(offset + 1);
+    offset += 3;
+  } else {
+    const [encodedLength, nameOffset] = readUnsignedVarint(value, offset);
+    nameLength = encodedLength - 1;
+    offset = nameOffset;
+  }
+
   const name = value.subarray(offset, offset + nameLength).toString();
   offset += nameLength;
 
@@ -105,7 +113,7 @@ function readMetadataLog(topicName: string): TopicMetadata | undefined {
 
   let offset = 0;
   let topic: TopicMetadata | undefined;
-  const partitions: PartitionMetadata[] = [];
+  const partitionsByTopic = new Map<string, PartitionMetadata[]>();
 
   while (offset + 61 <= log.length) {
     const batchLength = log.readInt32BE(offset + 8);
@@ -121,8 +129,7 @@ function readMetadataLog(topicName: string): TopicMetadata | undefined {
       [, currentOffset] = readVarint(log, currentOffset);
 
       const [keyLength, keyOffset] = readVarint(log, currentOffset);
-      const key = log.subarray(keyOffset, keyOffset + keyLength);
-      currentOffset = keyOffset + keyLength;
+      currentOffset = keyOffset + Math.max(keyLength, 0);
       const [valueLength, recordValueOffset] = readVarint(log, currentOffset);
       const value = log.subarray(recordValueOffset, recordValueOffset + valueLength);
       recordOffset = recordEnd;
@@ -138,19 +145,18 @@ function readMetadataLog(topicName: string): TopicMetadata | undefined {
       if (apiKey === 2) {
         const record = readTopicRecord(value, messageOffset);
         if (record.name === topicName) {
-          topic = { topicId: record.topicId, partitions: [] };
+          topic = { topicId: record.topicId, partitions: partitionsByTopic.get(record.topicId.toString("hex")) ?? [] };
         }
-      } else if (apiKey === 3 && topic) {
+      } else if (apiKey === 3) {
         const partition = readPartitionRecord(value, messageOffset);
-        if (topic.topicId.equals(partition.topicId)) {
-          partitions.push(partition);
-        }
+        const topicPartitions = partitionsByTopic.get(partition.topicId.toString("hex")) ?? [];
+        topicPartitions.push(partition);
+        partitionsByTopic.set(partition.topicId.toString("hex"), topicPartitions);
+        if (topic?.topicId.equals(partition.topicId)) topic.partitions = topicPartitions;
       }
     }
 
-    if (topic) {
-      topic.partitions = partitions;
-    }
+    if (topic) topic.partitions = partitionsByTopic.get(topic.topicId.toString("hex")) ?? [];
     offset = batchEnd;
   }
 
