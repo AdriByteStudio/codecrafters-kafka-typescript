@@ -264,6 +264,18 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const bodyOffset = 14 + Math.max(clientIdLength, 0) + 1;
         const fetchTopicCountOffset = bodyOffset + 21;
         const topicCount = request[fetchTopicCountOffset] - 1;
+
+        if (topicCount <= 0) {
+          const body = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+          const response = Buffer.alloc(4 + 4 + 1 + body.length);
+          response.writeUInt32BE(4 + 1 + body.length, 0);
+          response.writeInt32BE(correlationId, 4);
+          response[8] = 0;
+          body.copy(response, 9);
+          connection.write(response);
+          continue;
+        }
+
         const topicIdOffset = fetchTopicCountOffset + 1;
         const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
         const partitionCountOffset = topicIdOffset + 16;
