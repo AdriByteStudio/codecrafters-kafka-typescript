@@ -367,7 +367,7 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       if (apiKey === 0) {
         const clientIdLength = request.readInt16BE(12);
         const { topicName, partitionIndex } = parseProduceRequest(request, clientIdLength);
-        const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1);
+        const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 1 + 1);
         let partitionOffset = 0;
         partition.writeInt32BE(partitionIndex, partitionOffset);
         partitionOffset += 4;
@@ -378,6 +378,9 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         partition.writeBigInt64BE(-1n, partitionOffset);
         partitionOffset += 8;
         partition.writeBigInt64BE(-1n, partitionOffset);
+        partitionOffset += 8;
+        partition[partitionOffset++] = 1;
+        partition[partitionOffset++] = 0;
         partition[partitionOffset] = 0;
 
         const topic = Buffer.concat([
@@ -388,9 +391,9 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
           Buffer.from([0]),
         ]);
         const body = Buffer.concat([
-          Buffer.alloc(4),
           Buffer.from([2]),
           topic,
+          Buffer.alloc(4),
           Buffer.from([0]),
         ]);
         const response = Buffer.alloc(4 + 4 + 1 + body.length);
