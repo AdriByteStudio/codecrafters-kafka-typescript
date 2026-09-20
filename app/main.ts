@@ -11,6 +11,7 @@ type PartitionMetadata = {
 };
 
 type TopicMetadata = {
+  name: string;
   topicId: Buffer;
   partitions: PartitionMetadata[];
 };
@@ -155,6 +156,7 @@ function readMetadataLog(): Map<string, TopicMetadata> {
         if (apiKey === 2) {
           const record = readTopicRecord(value, messageOffset);
           topics.set(record.name, {
+            name: record.name,
             topicId: record.topicId,
             partitions: partitionsByTopic.get(record.topicId.toString("hex")) ?? [],
           });
@@ -252,24 +254,27 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const topicIdOffset = fetchTopicCountOffset + 1;
         const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
         const topicMetadata = [...readMetadataLog().values()].find((topic) => topic.topicId.equals(topicId));
+        let records = Buffer.alloc(0);
 
-        const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 4 + 1 + 1);
-        let partitionOffset = 0;
-        partition.writeInt32BE(0, partitionOffset);
-        partitionOffset += 4;
-        partition.writeInt16BE(topicCount > 0 && !topicMetadata ? 100 : 0, partitionOffset);
-        partitionOffset += 2;
-        partition.writeBigInt64BE(0n, partitionOffset);
-        partitionOffset += 8;
-        partition.writeBigInt64BE(0n, partitionOffset);
-        partitionOffset += 8;
-        partition.writeBigInt64BE(0n, partitionOffset);
-        partitionOffset += 8;
-        partition[partitionOffset++] = 1;
-        partition.writeInt32BE(-1, partitionOffset);
-        partitionOffset += 4;
-        partition[partitionOffset++] = 1;
-        partition[partitionOffset] = 0;
+        if (topicMetadata) {
+          try {
+            records = readFileSync(`/tmp/kraft-combined-logs/${topicMetadata.name}-0/00000000000000000000.log`);
+          } catch {
+            records = Buffer.alloc(0);
+          }
+        }
+
+        const partitionHeader = Buffer.alloc(6);
+        partitionHeader.writeInt16BE(topicCount > 0 && !topicMetadata ? 100 : 0, 4);
+        const partition = Buffer.concat([
+          partitionHeader,
+          Buffer.alloc(8),
+          Buffer.alloc(8),
+          Buffer.alloc(8),
+          Buffer.from([1, 0xff, 0xff, 0xff, 0xff, records.length + 1]),
+          records,
+          Buffer.from([0]),
+        ]);
 
         const topicResponse = Buffer.concat([
           topicId,
