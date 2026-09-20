@@ -1,5 +1,6 @@
 import net from "net";
 import { readFileSync } from "fs";
+import { appendFileSync, mkdirSync } from "fs";
 
 type PartitionMetadata = {
   partitionId: number;
@@ -63,7 +64,7 @@ function encodeUnsignedVarint(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
-function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number; end: number } {
+function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number; records: Buffer; end: number } {
   let offset = 14 + Math.max(clientIdLength, 0) + 1;
   const transactionalIdLength = request[offset++];
 
@@ -81,11 +82,28 @@ function parseProduceRequest(request: Buffer, clientIdLength: number): { topicNa
   const partitionIndex = request.readInt32BE(offset);
   offset += 4;
   const [recordsLength, recordsOffset] = readUnsignedVarint(request, offset);
+  const records = request.subarray(recordsOffset, recordsOffset + recordsLength - 1);
   offset = recordsOffset + recordsLength - 1;
   offset += 1;
   offset += 1;
 
-  return { topicName, partitionIndex, end: offset };
+  return { topicName, partitionIndex, records, end: offset };
+}
+
+function getLogDirectory(): string {
+  const propertiesPath = process.argv[2];
+
+  if (propertiesPath) {
+    try {
+      const properties = readFileSync(propertiesPath, "utf8");
+      const logDirs = properties.match(/^log\.dirs\s*=\s*(.+)$/m)?.[1].split(",")[0].trim();
+      if (logDirs) return logDirs;
+    } catch {
+      // Use the standard KRaft log directory when no properties file is available.
+    }
+  }
+
+  return "/tmp/kraft-combined-logs";
 }
 
 function readCompactIntArray(buffer: Buffer, offset: number): [number[], number] {
@@ -366,10 +384,17 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
 
       if (apiKey === 0) {
         const clientIdLength = request.readInt16BE(12);
-        const { topicName, partitionIndex } = parseProduceRequest(request, clientIdLength);
+        const { topicName, partitionIndex, records } = parseProduceRequest(request, clientIdLength);
         const metadata = readMetadataLog().get(topicName.toString());
         const partitionExists = metadata?.partitions.some((partition) => partition.partitionId === partitionIndex) ?? false;
         const errorCode = metadata && partitionExists ? 0 : 3;
+
+        if (errorCode === 0) {
+          const partitionDirectory = `${getLogDirectory()}/${topicName.toString()}-${partitionIndex}`;
+          mkdirSync(partitionDirectory, { recursive: true });
+          appendFileSync(`${partitionDirectory}/00000000000000000000.log`, records);
+        }
+
         const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 1 + 1);
         let partitionOffset = 0;
         partition.writeInt32BE(partitionIndex, partitionOffset);
