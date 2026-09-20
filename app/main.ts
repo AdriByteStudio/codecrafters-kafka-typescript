@@ -244,7 +244,28 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       const correlationId = request.readInt32BE(8);
       const apiKey = request.readInt16BE(4);
 
-      if (version < 0 || version > 4) {
+      if (apiKey === 1) {
+        const body = Buffer.alloc(4 + 2 + 4 + 1 + 1);
+        let offset = 0;
+        body.writeInt32BE(0, offset);
+        offset += 4;
+        body.writeInt16BE(0, offset);
+        offset += 2;
+        body.writeInt32BE(0, offset);
+        offset += 4;
+        body[offset++] = 1;
+        body[offset] = 0;
+
+        const response = Buffer.alloc(4 + 4 + 1 + body.length);
+        response.writeUInt32BE(4 + 1 + body.length, 0);
+        response.writeInt32BE(correlationId, 4);
+        response[8] = 0;
+        body.copy(response, 9);
+        connection.write(response);
+        continue;
+      }
+
+      if (apiKey === 18 && (version < 0 || version > 4)) {
         const response = Buffer.alloc(10);
         response.writeUInt32BE(6, 0);
         response.writeInt32BE(correlationId, 4);
