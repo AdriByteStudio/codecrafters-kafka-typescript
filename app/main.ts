@@ -63,6 +63,25 @@ function encodeUnsignedVarint(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
+function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number } {
+  let offset = 14 + Math.max(clientIdLength, 0) + 1;
+  const transactionalIdLength = request.readInt16BE(offset);
+  offset += 2;
+
+  if (transactionalIdLength >= 0) {
+    offset += transactionalIdLength;
+  }
+
+  offset += 2 + 4;
+  offset += 1;
+  const topicNameLength = request[offset++] - 1;
+  const topicName = request.subarray(offset, offset + topicNameLength);
+  offset += topicNameLength;
+  offset += 1;
+
+  return { topicName, partitionIndex: request.readInt32BE(offset) };
+}
+
 function readCompactIntArray(buffer: Buffer, offset: number): [number[], number] {
   const [encodedLength, nextOffset] = readUnsignedVarint(buffer, offset);
   const values: number[] = [];
@@ -335,6 +354,45 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         response.writeUInt32BE(6, 0);
         response.writeInt32BE(correlationId, 4);
         response.writeInt16BE(35, 8);
+        connection.write(response);
+        continue;
+      }
+
+      if (apiKey === 0) {
+        const clientIdLength = request.readInt16BE(12);
+        const { topicName, partitionIndex } = parseProduceRequest(request, clientIdLength);
+        const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1);
+        let partitionOffset = 0;
+        partition.writeInt32BE(partitionIndex, partitionOffset);
+        partitionOffset += 4;
+        partition.writeInt16BE(3, partitionOffset);
+        partitionOffset += 2;
+        partition.writeBigInt64BE(-1n, partitionOffset);
+        partitionOffset += 8;
+        partition.writeBigInt64BE(-1n, partitionOffset);
+        partitionOffset += 8;
+        partition.writeBigInt64BE(-1n, partitionOffset);
+        partition[partitionOffset] = 0;
+
+        const topic = Buffer.concat([
+          encodeUnsignedVarint(topicName.length + 1),
+          topicName,
+          Buffer.from([2]),
+          partition,
+          Buffer.from([0]),
+        ]);
+        const body = Buffer.concat([
+          Buffer.alloc(4),
+          Buffer.from([2]),
+          topic,
+          Buffer.from([0]),
+        ]);
+        const response = Buffer.alloc(4 + 4 + 1 + body.length);
+        response.writeUInt32BE(4 + 1 + body.length, 0);
+        response.writeInt32BE(correlationId, 4);
+        response[8] = 0;
+        body.copy(response, 9);
+
         connection.write(response);
         continue;
       }
