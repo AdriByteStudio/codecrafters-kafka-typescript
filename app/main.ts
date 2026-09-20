@@ -247,7 +247,7 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       if (apiKey === 1) {
         const clientIdLength = request.readInt16BE(12);
         const bodyOffset = 14 + Math.max(clientIdLength, 0) + 1;
-        const fetchTopicCountOffset = bodyOffset + 29;
+        const fetchTopicCountOffset = bodyOffset + 21;
         const topicCount = request[fetchTopicCountOffset] - 1;
         const topicIdOffset = fetchTopicCountOffset + 1;
         const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
