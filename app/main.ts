@@ -63,7 +63,7 @@ function encodeUnsignedVarint(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
-function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number } {
+function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number; end: number } {
   let offset = 14 + Math.max(clientIdLength, 0) + 1;
   const transactionalIdLength = request.readInt16BE(offset);
   offset += 2;
@@ -79,7 +79,14 @@ function parseProduceRequest(request: Buffer, clientIdLength: number): { topicNa
   offset += topicNameLength;
   offset += 1;
 
-  return { topicName, partitionIndex: request.readInt32BE(offset) };
+  const partitionIndex = request.readInt32BE(offset);
+  offset += 4;
+  const [recordsLength, recordsOffset] = readUnsignedVarint(request, offset);
+  offset = recordsOffset + recordsLength - 1;
+  offset += 1;
+  offset += 1;
+
+  return { topicName, partitionIndex, end: offset };
 }
 
 function readCompactIntArray(buffer: Buffer, offset: number): [number[], number] {
@@ -246,6 +253,14 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const clientIdLength = buffer.readInt16BE(12);
         try {
           const request = parseDescribeRequest(buffer, clientIdLength);
+          messageLength = Math.max(messageLength, request.end);
+        } catch {
+          return;
+        }
+      } else if (frameApiKey === 0 && buffer.length >= 14) {
+        const clientIdLength = buffer.readInt16BE(12);
+        try {
+          const request = parseProduceRequest(buffer, clientIdLength);
           messageLength = Math.max(messageLength, request.end);
         } catch {
           return;
