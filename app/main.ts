@@ -257,15 +257,7 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         } catch {
           return;
         }
-      } else if (frameApiKey === 0 && buffer.length >= 14) {
-        const clientIdLength = buffer.readInt16BE(12);
-        try {
-          const request = parseProduceRequest(buffer, clientIdLength);
-          messageLength = Math.max(messageLength, request.end);
-        } catch {
-          return;
-        }
-      } else if (buffer.length >= 14) {
+      } else if (frameApiKey !== 0 && buffer.length >= 14) {
         const clientIdLength = buffer.readInt16BE(12);
         const clientIdSize = clientIdLength < 0 ? 0 : clientIdLength;
         const bodyOffset = 14 + clientIdSize + 1;
