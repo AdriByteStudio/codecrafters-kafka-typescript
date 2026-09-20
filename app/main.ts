@@ -367,17 +367,20 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       if (apiKey === 0) {
         const clientIdLength = request.readInt16BE(12);
         const { topicName, partitionIndex } = parseProduceRequest(request, clientIdLength);
+        const metadata = readMetadataLog().get(topicName.toString());
+        const partitionExists = metadata?.partitions.some((partition) => partition.partitionId === partitionIndex) ?? false;
+        const errorCode = metadata && partitionExists ? 0 : 3;
         const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 1 + 1);
         let partitionOffset = 0;
         partition.writeInt32BE(partitionIndex, partitionOffset);
         partitionOffset += 4;
-        partition.writeInt16BE(3, partitionOffset);
+        partition.writeInt16BE(errorCode, partitionOffset);
         partitionOffset += 2;
-        partition.writeBigInt64BE(-1n, partitionOffset);
+        partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
         partitionOffset += 8;
         partition.writeBigInt64BE(-1n, partitionOffset);
         partitionOffset += 8;
-        partition.writeBigInt64BE(-1n, partitionOffset);
+        partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
         partitionOffset += 8;
         partition[partitionOffset++] = 1;
         partition[partitionOffset++] = 0;
