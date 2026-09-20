@@ -245,16 +245,46 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
       const apiKey = request.readInt16BE(4);
 
       if (apiKey === 1) {
-        const body = Buffer.alloc(4 + 2 + 4 + 1 + 1);
+        const clientIdLength = request.readInt16BE(12);
+        const bodyOffset = 14 + Math.max(clientIdLength, 0) + 1;
+        const fetchTopicCountOffset = bodyOffset + 29;
+        const topicCount = request[fetchTopicCountOffset] - 1;
+        const topicIdOffset = fetchTopicCountOffset + 1;
+        const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
+
+        const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 4 + 1 + 1);
+        let partitionOffset = 0;
+        partition.writeInt32BE(0, partitionOffset);
+        partitionOffset += 4;
+        partition.writeInt16BE(topicCount > 0 ? 100 : 0, partitionOffset);
+        partitionOffset += 2;
+        partition.writeBigInt64BE(0n, partitionOffset);
+        partitionOffset += 8;
+        partition.writeBigInt64BE(0n, partitionOffset);
+        partitionOffset += 8;
+        partition.writeBigInt64BE(0n, partitionOffset);
+        partitionOffset += 8;
+        partition[partitionOffset++] = 1;
+        partition.writeInt32BE(-1, partitionOffset);
+        partitionOffset += 4;
+        partition[partitionOffset++] = 1;
+        partition[partitionOffset] = 0;
+
+        const topicResponse = Buffer.concat([
+          topicId,
+          Buffer.from([2]),
+          partition,
+          Buffer.from([0]),
+        ]);
+
+        const body = Buffer.concat([
+          Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+          topicCount > 0 ? Buffer.from([2]) : Buffer.from([1]),
+          topicCount > 0 ? topicResponse : Buffer.alloc(0),
+          Buffer.from([0]),
+        ]);
+
         let offset = 0;
-        body.writeInt32BE(0, offset);
-        offset += 4;
-        body.writeInt16BE(0, offset);
-        offset += 2;
-        body.writeInt32BE(0, offset);
-        offset += 4;
-        body[offset++] = 1;
-        body[offset] = 0;
 
         const response = Buffer.alloc(4 + 4 + 1 + body.length);
         response.writeUInt32BE(4 + 1 + body.length, 0);
