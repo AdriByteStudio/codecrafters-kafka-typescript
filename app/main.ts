@@ -251,12 +251,13 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const topicCount = request[fetchTopicCountOffset] - 1;
         const topicIdOffset = fetchTopicCountOffset + 1;
         const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
+        const topicMetadata = [...readMetadataLog().values()].find((topic) => topic.topicId.equals(topicId));
 
         const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 4 + 1 + 1);
         let partitionOffset = 0;
         partition.writeInt32BE(0, partitionOffset);
         partitionOffset += 4;
-        partition.writeInt16BE(topicCount > 0 ? 100 : 0, partitionOffset);
+        partition.writeInt16BE(topicCount > 0 && !topicMetadata ? 100 : 0, partitionOffset);
         partitionOffset += 2;
         partition.writeBigInt64BE(0n, partitionOffset);
         partitionOffset += 8;
