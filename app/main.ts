@@ -50,6 +50,19 @@ function readUnsignedVarint(buffer: Buffer, offset: number): [number, number] {
   throw new Error("truncated unsigned varint");
 }
 
+function encodeUnsignedVarint(value: number): Buffer {
+  const bytes: number[] = [];
+
+  do {
+    let byte = value & 0x7f;
+    value >>>= 7;
+    if (value !== 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (value !== 0);
+
+  return Buffer.from(bytes);
+}
+
 function readCompactIntArray(buffer: Buffer, offset: number): [number[], number] {
   const [encodedLength, nextOffset] = readUnsignedVarint(buffer, offset);
   const values: number[] = [];
@@ -253,6 +266,8 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         const topicCount = request[fetchTopicCountOffset] - 1;
         const topicIdOffset = fetchTopicCountOffset + 1;
         const topicId = request.subarray(topicIdOffset, topicIdOffset + 16);
+        const partitionCountOffset = topicIdOffset + 16;
+        const partitionIndex = request.readInt32BE(partitionCountOffset + 1);
         const topicMetadata = [...readMetadataLog().values()].find((topic) => topic.topicId.equals(topicId));
         let records = Buffer.alloc(0);
 
@@ -265,13 +280,15 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         }
 
         const partitionHeader = Buffer.alloc(6);
+        partitionHeader.writeInt32BE(partitionIndex, 0);
         partitionHeader.writeInt16BE(topicCount > 0 && !topicMetadata ? 100 : 0, 4);
         const partition = Buffer.concat([
           partitionHeader,
           Buffer.alloc(8),
           Buffer.alloc(8),
           Buffer.alloc(8),
-          Buffer.from([1, 0xff, 0xff, 0xff, 0xff, records.length + 1]),
+          Buffer.from([1, 0xff, 0xff, 0xff, 0xff]),
+          encodeUnsignedVarint(records.length + 1),
           records,
           Buffer.from([0]),
         ]);
