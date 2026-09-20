@@ -318,20 +318,23 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
         continue;
       }
 
-      const apiKeys = Buffer.alloc(14);
-      apiKeys.writeInt16BE(18, 0);
+      const apiKeys = Buffer.alloc(21);
+      apiKeys.writeInt16BE(1, 0);
       apiKeys.writeInt16BE(0, 2);
-      apiKeys.writeInt16BE(4, 4);
-      apiKeys.writeInt16BE(75, 7);
+      apiKeys.writeInt16BE(16, 4);
+      apiKeys.writeInt16BE(18, 7);
       apiKeys.writeInt16BE(0, 9);
-      apiKeys.writeInt16BE(0, 11);
+      apiKeys.writeInt16BE(4, 11);
+      apiKeys.writeInt16BE(75, 14);
+      apiKeys.writeInt16BE(0, 16);
+      apiKeys.writeInt16BE(0, 18);
 
       const body = Buffer.alloc(2 + 1 + apiKeys.length + 4 + 1);
       let offset = 0;
 
       body.writeInt16BE(0, offset);
       offset += 2;
-      body[offset] = 3;
+      body[offset] = 4;
       offset += 1;
       apiKeys.copy(body, offset);
       offset += apiKeys.length;
