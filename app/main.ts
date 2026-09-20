@@ -65,11 +65,10 @@ function encodeUnsignedVarint(value: number): Buffer {
 
 function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitionIndex: number; end: number } {
   let offset = 14 + Math.max(clientIdLength, 0) + 1;
-  const transactionalIdLength = request.readInt16BE(offset);
-  offset += 2;
+  const transactionalIdLength = request[offset++];
 
-  if (transactionalIdLength >= 0) {
-    offset += transactionalIdLength;
+  if (transactionalIdLength > 0) {
+    offset += transactionalIdLength - 1;
   }
 
   offset += 2 + 4;
