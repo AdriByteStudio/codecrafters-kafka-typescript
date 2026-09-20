@@ -26,9 +26,7 @@ function readVarint(buffer: Buffer, offset: number): [number, number] {
   while (offset < buffer.length) {
     const byte = buffer[offset++];
     value |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      return [(value >>> 1) ^ -(value & 1), offset];
-    }
+    if ((byte & 0x80) === 0) return [(value >>> 1) ^ -(value & 1), offset];
     shift += 7;
   }
 
@@ -42,9 +40,7 @@ function readUnsignedVarint(buffer: Buffer, offset: number): [number, number] {
   while (offset < buffer.length) {
     const byte = buffer[offset++];
     value |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      return [value, offset];
-    }
+    if ((byte & 0x80) === 0) return [value, offset];
     shift += 7;
   }
 
@@ -53,23 +49,25 @@ function readUnsignedVarint(buffer: Buffer, offset: number): [number, number] {
 
 function encodeUnsignedVarint(value: number): Buffer {
   const bytes: number[] = [];
-
   do {
     let byte = value & 0x7f;
     value >>>= 7;
     if (value !== 0) byte |= 0x80;
     bytes.push(byte);
   } while (value !== 0);
-
   return Buffer.from(bytes);
 }
-
 type ProducePartition = {
   partitionIndex: number;
   records: Buffer;
 };
 
-function parseProduceRequest(request: Buffer, clientIdLength: number): { topicName: Buffer; partitions: ProducePartition[]; end: number } {
+type ProduceTopic = {
+  topicName: Buffer;
+  partitions: ProducePartition[];
+};
+
+function parseProduceRequest(request: Buffer, clientIdLength: number): { topics: ProduceTopic[]; end: number } {
   let offset = 14 + Math.max(clientIdLength, 0) + 1;
   const transactionalIdLength = request[offset++];
 
@@ -82,28 +80,34 @@ function parseProduceRequest(request: Buffer, clientIdLength: number): { topicNa
   offset = topicCountOffset;
   if (topicCount <= 1) throw new Error("Produce request has no topics");
 
-  const [topicNameLengthValue, topicNameOffset] = readUnsignedVarint(request, offset);
-  offset = topicNameOffset;
-  const topicNameLength = topicNameLengthValue - 1;
-  const topicName = request.subarray(offset, offset + topicNameLength);
-  offset += topicNameLength;
+  const topics: ProduceTopic[] = [];
+  for (let topicIndex = 0; topicIndex < topicCount - 1; topicIndex += 1) {
+    const [topicNameLengthValue, topicNameOffset] = readUnsignedVarint(request, offset);
+    offset = topicNameOffset;
+    const topicNameLength = topicNameLengthValue - 1;
+    const topicName = request.subarray(offset, offset + topicNameLength);
+    offset += topicNameLength;
 
-  const [partitionCount, partitionCountOffset] = readUnsignedVarint(request, offset);
-  offset = partitionCountOffset;
-  const partitions: ProducePartition[] = [];
+    const [partitionCount, partitionCountOffset] = readUnsignedVarint(request, offset);
+    offset = partitionCountOffset;
+    const partitions: ProducePartition[] = [];
 
-  for (let index = 0; index < partitionCount - 1; index += 1) {
-    const partitionIndex = request.readInt32BE(offset);
-    offset += 4;
-    const [recordsLength, recordsOffset] = readUnsignedVarint(request, offset);
-    const records = request.subarray(recordsOffset, recordsOffset + recordsLength - 1);
-    offset = recordsOffset + recordsLength - 1;
+    for (let partitionIndex = 0; partitionIndex < partitionCount - 1; partitionIndex += 1) {
+      const index = request.readInt32BE(offset);
+      offset += 4;
+      const [recordsLength, recordsOffset] = readUnsignedVarint(request, offset);
+      const records = request.subarray(recordsOffset, recordsOffset + recordsLength - 1);
+      offset = recordsOffset + recordsLength - 1;
+      offset += 1;
+      partitions.push({ partitionIndex: index, records });
+    }
+
     offset += 1;
-    partitions.push({ partitionIndex, records });
+    topics.push({ topicName, partitions });
   }
 
-  offset += 2;
-  return { topicName, partitions, end: offset };
+  offset += 1;
+  return { topics, end: offset };
 }
 
 function getLogDirectory(): string {
@@ -387,46 +391,50 @@ const server: net.Server = net.createServer((connection: net.Socket) => {
 
       if (apiKey === 0) {
         const clientIdLength = request.readInt16BE(12);
-        const { topicName, partitions } = parseProduceRequest(request, clientIdLength);
-        const metadata = readMetadataLog().get(topicName.toString());
-        const partitionResponses = partitions.map(({ partitionIndex, records }) => {
-          const partitionExists = metadata?.partitions.some((partition) => partition.partitionId === partitionIndex) ?? false;
-          const errorCode = metadata && partitionExists ? 0 : 3;
+        const { topics } = parseProduceRequest(request, clientIdLength);
+        const metadataByName = readMetadataLog();
+        const topicResponses = topics.map(({ topicName, partitions }) => {
+          const metadata = metadataByName.get(topicName.toString());
+          const partitionResponses = partitions.map(({ partitionIndex, records }) => {
+            const partitionExists = metadata?.partitions.some((partition) => partition.partitionId === partitionIndex) ?? false;
+            const errorCode = metadata && partitionExists ? 0 : 3;
 
-          if (errorCode === 0) {
-            const partitionDirectory = `${getLogDirectory()}/${topicName.toString()}-${partitionIndex}`;
-            mkdirSync(partitionDirectory, { recursive: true });
-            appendFileSync(`${partitionDirectory}/00000000000000000000.log`, records);
-          }
+            if (errorCode === 0) {
+              const partitionDirectory = `${getLogDirectory()}/${topicName.toString()}-${partitionIndex}`;
+              mkdirSync(partitionDirectory, { recursive: true });
+              appendFileSync(`${partitionDirectory}/00000000000000000000.log`, records);
+            }
 
-          const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 1 + 1);
-          let partitionOffset = 0;
-          partition.writeInt32BE(partitionIndex, partitionOffset);
-          partitionOffset += 4;
-          partition.writeInt16BE(errorCode, partitionOffset);
-          partitionOffset += 2;
-          partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
-          partitionOffset += 8;
-          partition.writeBigInt64BE(-1n, partitionOffset);
-          partitionOffset += 8;
-          partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
-          partitionOffset += 8;
-          partition[partitionOffset++] = 1;
-          partition[partitionOffset++] = 0;
-          partition[partitionOffset] = 0;
-          return partition;
+            const partition = Buffer.alloc(4 + 2 + 8 + 8 + 8 + 1 + 1 + 1);
+            let partitionOffset = 0;
+            partition.writeInt32BE(partitionIndex, partitionOffset);
+            partitionOffset += 4;
+            partition.writeInt16BE(errorCode, partitionOffset);
+            partitionOffset += 2;
+            partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
+            partitionOffset += 8;
+            partition.writeBigInt64BE(-1n, partitionOffset);
+            partitionOffset += 8;
+            partition.writeBigInt64BE(errorCode === 0 ? 0n : -1n, partitionOffset);
+            partitionOffset += 8;
+            partition[partitionOffset++] = 1;
+            partition[partitionOffset++] = 0;
+            partition[partitionOffset] = 0;
+            return partition;
+          });
+
+          return Buffer.concat([
+            encodeUnsignedVarint(topicName.length + 1),
+            topicName,
+            encodeUnsignedVarint(partitionResponses.length + 1),
+            ...partitionResponses,
+            Buffer.from([0]),
+          ]);
         });
 
-        const topic = Buffer.concat([
-          encodeUnsignedVarint(topicName.length + 1),
-          topicName,
-          encodeUnsignedVarint(partitionResponses.length + 1),
-          ...partitionResponses,
-          Buffer.from([0]),
-        ]);
         const body = Buffer.concat([
-          Buffer.from([2]),
-          topic,
+          encodeUnsignedVarint(topicResponses.length + 1),
+          ...topicResponses,
           Buffer.alloc(4),
           Buffer.from([0]),
         ]);
